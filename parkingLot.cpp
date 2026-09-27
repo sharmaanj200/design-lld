@@ -11,12 +11,62 @@ we will assume there will be 5 levels and 90 parking spots at each with 30 assig
 
 
 /*
+1. The parking lot should have multiple levels, each level with a certain number of parking spots.
+2. The parking lot should support different types of vehicles, such as cars, motorcycles, and trucks.
+3. Each parking spot should be able to accommodate a specific type of vehicle.
+4. The system should assign a parking spot to a vehicle upon entry and release it when the vehicle exits.
+5. The system should track the availability of parking spots and provide real-time information to customers.
+6. The system should handle multiple entry and exit points and support concurrent access.
+*/
 
-1. a vehicle comes in -> check if a parking slot is available -----yes---> assign it and assign time. 
-2. a vehicle leaves --> deregister the parking slot. ----> give the price 
+
+
+
+
+/*
+
+Vehicle
+- id
+- vtype
+
+Ticket
+- id
+- vehicle
+- arrivalTime
+
+ParkingLevel
+- level
+- list<spots>
+- availableSpots
+
+IParkingStrategy (interface)
+- void getSpot(vehicle)
+
+ICostStrategy (interface)
+- void getCost(ticket, departTime)
+
+
+ParkingLot
+- levels
+- parkingStrategy
+- costStrategy
++ park(vehicle): Ticket
++ exit(ticket, departTime): Money
 
 */
 
+class IdGenerator {
+    static int nextId;
+
+public:
+    static int generate() {
+        return nextId++;
+    }
+};
+
+int IdGenerator::nextId = 1;
+
+using dt = std::chrono::time_point <std::chrono::steady_clock>;
 constexpr int levels = 5;
 constexpr int spots = 30;
 
@@ -28,296 +78,446 @@ enum class CostType {
     Bike = 10, Car = 20, Truck = 30
 };
 
-class Vehicle;
-class Ticket;
 
-class ParkingSpot{
-    using levelMap = std::map<int, std::vector<bool>>;
-    levelMap p_availableParkingSpots;
-    Vehicle* p_vehicle;
-
+class Vehicle {
 public:
-    ParkingSpot(Vehicle* v) : p_vehicle(v) {
-        for(int i=0; i<levels; i++)
-        {
-            p_availableParkingSpots[i].resize(spots, 0);
-        }
-    };
+    std::string v_id;
+    VehicleType v_type;
+};
 
-    std::optional<std::pair<int, int>> determineSpot()
+class ParkingSpotStrategy {
+public:
+    virtual int getNumberofSpotsPerVehicle() = 0;
+    virtual VehicleType getType() = 0;
+    virtual ~ParkingSpotStrategy() = default;
+};
+
+class BikeParking : public ParkingSpotStrategy {
+public:
+    int getNumberofSpotsPerVehicle() override
     {
-        for(int i=0; i<levels; i++)
-        {
-            for(int j=0; j<spots; j++)
-            {
-                if(!p_availableParkingSpots[i][j]) return std::pair<int, int>{i, j};
-            }
-        }
-        return std::nullopt;
+        return spots / 3;
     }
 
-    std::pair<int, int> assignSpot()
+    VehicleType getType() override {
+        return VehicleType::Bike;
+    }
+};
+
+class CarParking : public ParkingSpotStrategy {
+public:
+    int getNumberofSpotsPerVehicle() override
     {
-        auto spot = determineSpot();
-        if(spot.has_value()) {
-            auto [l, s] = *spot;
-            p_availableParkingSpots[l][s] = 1;
-            return {l, s};
-        }
-        return {};
+        return spots / 3;
     }
 
-    void deAssignSpot(int l, int s)
+    VehicleType getType() override {
+        return VehicleType::Car;
+    }
+};
+
+class TruckParking : public ParkingSpotStrategy {
+public:
+    int getNumberofSpotsPerVehicle() override
     {
-        p_availableParkingSpots[l][s] = 0;
+        return spots / 3;
+    }
+
+    VehicleType getType() override {
+        return VehicleType::Truck;
     }
 };
 
 
-
-class Vehicle {
-    std::chrono::time_point <std::chrono::steady_clock> v_start, v_end;
-    std::chrono::duration <double> v_duration;
-    ParkingSpot* v_parkingspot;
-    VehicleType v_type;
-    int v_id;
-    
+class ParkingSpot {
 public:
-    Vehicle(VehicleType v, ParkingSpot* p) : v_type(v), v_parkingspot(p) {};
-    
-    int get_vehiclID() const {
-        return v_id;
-    }
+    VehicleType vehicle;
+    int level;
+    bool occupied;
 
-    VehicleType getVehicleType() const
-    {
-        return v_type;
-    }
+    ParkingSpot(int l, bool o, VehicleType v): level(l), occupied(o), vehicle(v) {};
 
-    std::optional<std::pair<int, int>> register_vehicle()
-    {
-        v_start = std::chrono::high_resolution_clock::now();
-        if(!v_parkingspot->determineSpot().has_value()) {
-            return std::nullopt;
-        } 
-        else {
-            return v_parkingspot->assignSpot();
+};
+
+
+class ParkingLevel {
+public:
+    int level;
+    int availableSpots;
+    std::vector<ParkingSpot> avlspots;
+
+    ParkingLevel(int l) : level(l) {
+        std::unique_ptr<ParkingSpotStrategy> parking;
+
+        parking = std::make_unique<BikeParking>();
+        int n_bike = parking->getNumberofSpotsPerVehicle();
+        for(int i=0; i<n_bike; i++)
+        {
+            avlspots.emplace_back(ParkingSpot(level, false, VehicleType::Bike));
         }
-    }
 
-    std::pair<int, int> deregister_vehicle(int l, int s)
-    {
-        // to determine the end time
-        v_end = std::chrono::high_resolution_clock::now();
-        v_duration = v_end - v_start;
-        int time_taken = std::chrono::duration_cast<std::chrono::seconds>(v_duration).count();
-        int hrs = time_taken / 3660;
-        int mins = (time_taken % 3660) / 60;
+        parking = std::make_unique<CarParking>();
+        int n_car = parking->getNumberofSpotsPerVehicle();
+        for(int i=0; i<n_car; i++)
+        {
+            avlspots.emplace_back(ParkingSpot(level, false, VehicleType::Car));
+        }
 
+        parking = std::make_unique<TruckParking>();
+        int n_truck = parking->getNumberofSpotsPerVehicle();
+        for(int i=0; i<n_truck; i++)
+        {
+            avlspots.emplace_back(ParkingSpot(level, false, VehicleType::Truck));
+        }
 
-        // to deregister and empty the parking slot
-        v_parkingspot->deAssignSpot(l, s);
-        return {hrs, mins};
-    }
-
+        availableSpots = n_bike + n_car + n_truck;
+    };
 };
 
 
 class Ticket {
-    Vehicle* t_vehicle;
-    int levelAssigned, spotAssigned;
+public:
+    std::string t_id;
+    VehicleType t_type;
+    int level;
+    int spot;
+    dt t_start;
+};
+
+
+class ParkingStrategy {
+public:
+    virtual int fillSpot(VehicleType vehicle ,ParkingLevel& p) = 0;
+    virtual ~ParkingStrategy() = default;
+};
+
+
+class FCFS : public ParkingStrategy {
 
 public:
-     Ticket(Vehicle* v): t_vehicle(v), levelAssigned(-1), spotAssigned(-1) {};
-    
-
-     void setLevelandSpot()
-     {
-        auto parkingData = t_vehicle->register_vehicle();
-        if(parkingData.has_value()) {
-            auto [level, spot] = *parkingData;
-            this->levelAssigned = level;
-            this->spotAssigned = spot;
+    int fillSpot(VehicleType vehicle,ParkingLevel& p) override {
+        int i = -1;
+        if(p.availableSpots)
+        {
+            for(i=0; i<p.avlspots.size(); i++)
+            {
+                ParkingSpot& spot = p.avlspots[i];
+                if(spot.occupied == false and spot.vehicle == vehicle) {
+                    spot.occupied = true;
+                    spot.level = p.level;
+                }
+            }
+            p.availableSpots -= 1;
         }
-        else {
-            std::cout << "No parking available for this vehicle type" << std::endl;
+        return i;
+    }
+};
+
+
+class CostStrategy {
+public:
+    virtual int getCost(int hrs) = 0;
+    virtual ~CostStrategy() = default;
+};
+
+
+class BikeCost : public CostStrategy {
+    int cost = 0;
+public:
+    int getCost(int hrs) override {
+        cost += static_cast<int>(CostType::Bike) * hrs;
+    }
+};
+
+
+class CarCost : public CostStrategy {
+    int cost = 0;
+public:
+    int getCost(int hrs) override {
+        cost += static_cast<int>(CostType::Car) * hrs;
+    }
+};
+
+
+class TruckCost : public CostStrategy {
+    int cost = 0;
+public:
+    int getCost(int hrs) override {
+        cost += static_cast<int>(CostType::Truck) * hrs;
+    }
+};
+
+
+struct location {
+    int level;
+    int spot;
+};
+
+//manages all the levels parking capacity together and assigns and deassigns spots.
+class LevelManager {
+    std::vector<ParkingLevel> p_level;
+    std::unique_ptr<ParkingStrategy> p_strategy;
+public:
+    LevelManager() {
+        for(int i=0; i<levels; i++)
+        {
+            p_level.emplace_back(ParkingLevel(i));
         }
-     }
+        p_strategy = std::make_unique<FCFS>();
+    }
 
-     int getCost()
-     {
-        VehicleType v = t_vehicle->getVehicleType();
-        int cost = 0;
-        if(v == VehicleType::Bike) cost = static_cast<int>(CostType::Bike);
-        else if(v == VehicleType::Car) cost = static_cast<int>(CostType::Car);
-        else cost = static_cast<int>(CostType::Truck);
+    location park_vehicle(VehicleType v)
+    {
+        for(int i=0; i<p_level.size(); i++)
+        {
+            int s = p_strategy->fillSpot(v, p_level[i]);
+            if(s != -1) return {i, s};  //level, spot
+        }
 
-        auto [hrs, min] = t_vehicle->deregister_vehicle(this->levelAssigned, this->spotAssigned);
-        if(min > 30) hrs += 1;
+        return {-1, -1};
+    }
 
-        return (hrs * cost);
-     }
+
+    void unpark_vehicle(const Ticket& t)
+    {
+        int l = t.level;
+        int s = t.spot;
+        ParkingLevel& level = p_level[l];
+        level.availableSpots += 1;
+        ParkingSpot& spot = level.avlspots[s];
+        spot.occupied = false;
+    }
 
 };
+
+
+class ParkingLotManager {
+
+    Ticket t;
+    Vehicle v;
+    LevelManager l;
+
+public:
+    ParkingLotManager() {
+
+    };
+
+    void getVehicleID(std::string id, VehicleType type)
+    {
+        v.v_id = id;
+        v.v_type = type;
+    }
+
+
+    void park(const Vehicle& vehicle)
+    {
+        location vehicle_loc = l.park_vehicle(v.v_type);
+        if(vehicle_loc.level == -1) std::cout <<"Parking lot is filled. try after some time";
+        else {
+            t.level = vehicle_loc.level;
+            t.spot = vehicle_loc.spot;
+        }
+
+        v = vehicle;
+        t.t_id = IdGenerator::generate();
+        t.t_type = vehicle.v_type;
+        t.t_start = std::chrono::high_resolution_clock::now();
+        t.level = vehicle_loc.level;
+        t.spot = vehicle_loc.spot;
+    }
+
+    double calculateCost(const dt& s_time, const dt& e_time) 
+    {
+        //time calculation
+        std::chrono::duration <double> v_duration = e_time - s_time;
+        int time_taken = std::chrono::duration_cast<std::chrono::seconds>(v_duration).count();
+        int hrs = time_taken / 3600;
+        int mins = (time_taken % 3600) / 60;
+        if(mins > 30) hrs += 1;
+
+        std::unique_ptr<CostStrategy> cs;
+        //cost calculation
+        if(v.v_type == VehicleType::Bike) {
+            cs = std::make_unique<BikeCost>();
+        }
+
+        if(v.v_type == VehicleType::Car) {
+            cs = std::make_unique<CarCost>();
+        }
+
+        if(v.v_type == VehicleType::Truck) {
+            cs = std::make_unique<TruckCost>();
+        }
+        return cs->getCost(hrs);
+    }
+
+    double unpark(const Ticket& t)
+    {
+        l.unpark_vehicle(t);
+        dt t_end = std::chrono::high_resolution_clock::now();
+        return calculateCost(t.t_start, t_end);
+    }
+
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// class ParkingSpot{
+//     using levelMap = std::map<int, std::vector<bool>>;
+//     levelMap p_availableParkingSpots;
+//     Vehicle* p_vehicle;
+
+// public:
+//     ParkingSpot(Vehicle* v) : p_vehicle(v) {
+//         for(int i=0; i<levels; i++)
+//         {
+//             p_availableParkingSpots[i].resize(spots, 0);
+//         }
+//     };
+
+//     std::optional<std::pair<int, int>> determineSpot()
+//     {
+//         for(int i=0; i<levels; i++)
+//         {
+//             for(int j=0; j<spots; j++)
+//             {
+//                 if(!p_availableParkingSpots[i][j]) return std::pair<int, int>{i, j};
+//             }
+//         }
+//         return std::nullopt;
+//     }
+
+//     std::pair<int, int> assignSpot()
+//     {
+//         auto spot = determineSpot();
+//         if(spot.has_value()) {
+//             auto [l, s] = *spot;
+//             p_availableParkingSpots[l][s] = 1;
+//             return {l, s};
+//         }
+//         return {};
+//     }
+
+//     void deAssignSpot(int l, int s)
+//     {
+//         p_availableParkingSpots[l][s] = 0;
+//     }
+// };
+
+
+
+// class Vehicle {
+//     std::chrono::time_point <std::chrono::steady_clock> v_start, v_end;  //out of this class  
+//     ParkingSpot* v_parkingspot;
+//     VehicleType v_type;
+//     int v_id;
+    
+// public:
+//     Vehicle(VehicleType v, ParkingSpot* p) : v_type(v), v_parkingspot(p) {};
+    
+//     int get_vehiclID() const {
+//         return v_id;
+//     }
+
+//     VehicleType getVehicleType() const
+//     {
+//         return v_type;
+//     }
+
+//     std::optional<std::pair<int, int>> register_vehicle()
+//     {
+//         v_start = std::chrono::high_resolution_clock::now();
+//         if(!v_parkingspot->determineSpot().has_value()) {
+//             return std::nullopt;
+//         } 
+//         else {
+//             return v_parkingspot->assignSpot();
+//         }
+//     }
+
+//     std::pair<int, int> deregister_vehicle(int l, int s)
+//     {
+//         // to determine the end time
+//         v_end = std::chrono::high_resolution_clock::now();
+//         std::chrono::duration <double> v_duration = v_end - v_start;
+//         int time_taken = std::chrono::duration_cast<std::chrono::seconds>(v_duration).count();
+//         int hrs = time_taken / 3600;
+//         int mins = (time_taken % 3600) / 60;   //can be done using stl
+
+
+//         // to deregister and empty the parking slot
+//         v_parkingspot->deAssignSpot(l, s);
+//         return {hrs, mins};
+//     }
+
+// };
+
+
+// class Ticket {
+//     Vehicle* t_vehicle;
+//     int levelAssigned, spotAssigned;
+
+// public:
+//      Ticket(Vehicle* v): t_vehicle(v), levelAssigned(-1), spotAssigned(-1) {};
+    
+
+//      void setLevelandSpot()
+//      {
+//         auto parkingData = t_vehicle->register_vehicle();
+//         if(parkingData.has_value()) {
+//             auto [level, spot] = *parkingData;
+//             this->levelAssigned = level;
+//             this->spotAssigned = spot;
+//         }
+//         else {
+//             std::cout << "No parking available for this vehicle type" << std::endl;
+//         }
+//      }
+
+//      int getCost()
+//      {
+//         VehicleType v = t_vehicle->getVehicleType();
+//         int cost = 0;
+//         if(v == VehicleType::Bike) cost = static_cast<int>(CostType::Bike);
+//         else if(v == VehicleType::Car) cost = static_cast<int>(CostType::Car);
+//         else cost = static_cast<int>(CostType::Truck);
+
+//         auto [hrs, min] = t_vehicle->deregister_vehicle(this->levelAssigned, this->spotAssigned);
+//         if(min > 30) hrs += 1;
+
+//         return (hrs * cost);
+//      }
+
+// };
 
 // class ParkingLot {
     
 
 
 // };
-
-
-#include <thread>
-
-int main()
-{
-    // ---------------------------------------
-    // Create parking areas
-    // ---------------------------------------
-    ParkingSpot bikeParking(nullptr);
-    ParkingSpot carParking(nullptr);
-    ParkingSpot truckParking(nullptr);
-
-    // ---------------------------------------
-    // Create vehicles
-    // ---------------------------------------
-    Vehicle bike1(VehicleType::Bike, &bikeParking);
-    Vehicle bike2(VehicleType::Bike, &bikeParking);
-
-    Vehicle car1(VehicleType::Car, &carParking);
-    Vehicle car2(VehicleType::Car, &carParking);
-
-    Vehicle truck1(VehicleType::Truck, &truckParking);
-
-    // ---------------------------------------
-    // Create tickets
-    // ---------------------------------------
-    Ticket bikeTicket1(&bike1);
-    Ticket bikeTicket2(&bike2);
-
-    Ticket carTicket1(&car1);
-    Ticket carTicket2(&car2);
-
-    Ticket truckTicket1(&truck1);
-
-
-    // =======================================
-    // VEHICLES ENTER
-    // =======================================
-
-    std::cout << "\n===== VEHICLES ENTERING =====\n\n";
-
-    std::cout << "Bike 1 entering...\n";
-    bikeTicket1.setLevelandSpot();
-
-    std::cout << "Bike 2 entering...\n";
-    bikeTicket2.setLevelandSpot();
-
-    std::cout << "Car 1 entering...\n";
-    carTicket1.setLevelandSpot();
-
-    std::cout << "Car 2 entering...\n";
-    carTicket2.setLevelandSpot();
-
-    std::cout << "Truck 1 entering...\n";
-    truckTicket1.setLevelandSpot();
-
-
-    // =======================================
-    // SHOW CURRENT PARKING
-    // =======================================
-
-    std::cout << "\n===== CURRENT PARKING =====\n";
-
-    std::cout << "Bike 1 -> Level/Spot assigned\n";
-    std::cout << "Bike 2 -> Level/Spot assigned\n";
-    std::cout << "Car 1  -> Level/Spot assigned\n";
-    std::cout << "Car 2  -> Level/Spot assigned\n";
-    std::cout << "Truck 1 -> Level/Spot assigned\n";
-
-
-    // =======================================
-    // SIMULATE PARKING TIME
-    // =======================================
-
-    std::cout << "\nVehicles are parked...\n";
-
-    std::this_thread::sleep_for(std::chrono::seconds(2));
-
-
-    // =======================================
-    // VEHICLE LEAVES
-    // =======================================
-
-    std::cout << "\n===== VEHICLES LEAVING =====\n\n";
-
-    std::cout << "Bike 1 leaving...\n";
-    int bikeCost = bikeTicket1.getCost();
-    std::cout << "Bike 1 cost = " << bikeCost << "\n";
-
-    std::cout << "\nCar 1 leaving...\n";
-    int carCost = carTicket1.getCost();
-    std::cout << "Car 1 cost = " << carCost << "\n";
-
-
-    // =======================================
-    // TEST WHETHER SPOT WAS FREED
-    // =======================================
-
-    std::cout << "\n===== TESTING FREED SPOT =====\n\n";
-
-    Vehicle bike3(VehicleType::Bike, &bikeParking);
-    Ticket bikeTicket3(&bike3);
-
-    std::cout << "Bike 3 entering after Bike 1 left...\n";
-    bikeTicket3.setLevelandSpot();
-
-
-    // =======================================
-    // TEST FULL PARKING
-    // =======================================
-
-    std::cout << "\n===== TESTING FULL PARKING =====\n\n";
-
-    std::vector<Vehicle*> testCars;
-    std::vector<Ticket*> testTickets;
-
-    // Fill all remaining car spots
-    for (int i = 0; i < levels * spots; i++)
-    {
-        Vehicle* car = new Vehicle(VehicleType::Car, &carParking);
-        Ticket* ticket = new Ticket(car);
-
-        std::cout << "Additional car " << i + 1 << " entering...\n";
-
-        ticket->setLevelandSpot();
-
-        testCars.push_back(car);
-        testTickets.push_back(ticket);
-    }
-
-
-    // =======================================
-    // TRY ONE MORE CAR
-    // =======================================
-
-    std::cout << "\nTrying to park one more car...\n";
-
-    Vehicle extraCar(VehicleType::Car, &carParking);
-    Ticket extraCarTicket(&extraCar);
-
-    extraCarTicket.setLevelandSpot();
-
-
-    // =======================================
-    // CLEANUP
-    // =======================================
-
-    for (auto ticket : testTickets)
-        delete ticket;
-
-    for (auto car : testCars)
-        delete car;
-
-    return 0;
-}
