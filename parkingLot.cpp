@@ -55,6 +55,7 @@ ParkingLot
 
 */
 
+//use singleton
 class IdGenerator {
     static int nextId;
 
@@ -178,6 +179,7 @@ public:
 class Ticket {
 public:
     std::string t_id;
+    std::string vehicle_id;
     VehicleType t_type;
     int level;
     int spot;
@@ -193,23 +195,27 @@ public:
 
 
 class FCFS : public ParkingStrategy {
-
 public:
-    int fillSpot(VehicleType vehicle,ParkingLevel& p) override {
-        int i = -1;
-        if(p.availableSpots)
+    int fillSpot(VehicleType vehicle, ParkingLevel& p) override {
+
+        if (p.availableSpots == 0)
+            return -1;
+
+        for (int i = 0; i < p.avlspots.size(); i++)
         {
-            for(i=0; i<p.avlspots.size(); i++)
+            ParkingSpot& spot = p.avlspots[i];
+
+            if (!spot.occupied && spot.vehicle == vehicle)
             {
-                ParkingSpot& spot = p.avlspots[i];
-                if(spot.occupied == false and spot.vehicle == vehicle) {
-                    spot.occupied = true;
-                    spot.level = p.level;
-                }
+                spot.occupied = true;
+                spot.level = p.level;
+                p.availableSpots--;
+
+                return i;
             }
-            p.availableSpots -= 1;
         }
-        return i;
+
+        return -1;
     }
 };
 
@@ -225,7 +231,7 @@ class BikeCost : public CostStrategy {
     int cost = 0;
 public:
     int getCost(int hrs) override {
-        cost += static_cast<int>(CostType::Bike) * hrs;
+        return static_cast<int>(CostType::Bike) * hrs;
     }
 };
 
@@ -234,7 +240,7 @@ class CarCost : public CostStrategy {
     int cost = 0;
 public:
     int getCost(int hrs) override {
-        cost += static_cast<int>(CostType::Car) * hrs;
+        return static_cast<int>(CostType::Car) * hrs;
     }
 };
 
@@ -243,7 +249,7 @@ class TruckCost : public CostStrategy {
     int cost = 0;
 public:
     int getCost(int hrs) override {
-        cost += static_cast<int>(CostType::Truck) * hrs;
+        return static_cast<int>(CostType::Truck) * hrs;
     }
 };
 
@@ -253,6 +259,7 @@ struct location {
     int spot;
 };
 
+//singleton
 //manages all the levels parking capacity together and assigns and deassigns spots.
 class LevelManager {
     std::vector<ParkingLevel> p_level;
@@ -283,8 +290,12 @@ public:
         int l = t.level;
         int s = t.spot;
         ParkingLevel& level = p_level[l];
-        level.availableSpots += 1;
+
         ParkingSpot& spot = level.avlspots[s];
+        if (!spot.occupied)
+            throw std::runtime_error("Spot already vacant");
+            
+        level.availableSpots += 1;
         spot.occupied = false;
     }
 
@@ -293,8 +304,7 @@ public:
 
 class ParkingLotManager {
 
-    Ticket t;
-    Vehicle v;
+    std::unordered_map<std::string, Ticket> activeTickets;
     LevelManager l;
 
 public:
@@ -302,34 +312,29 @@ public:
 
     };
 
-    void getVehicleID(std::string id, VehicleType type)
+
+    Ticket park(const Vehicle& vehicle)
     {
-        v.v_id = id;
-        v.v_type = type;
+        location vehicle_loc = l.park_vehicle(vehicle.v_type);
+        if(vehicle_loc.level == -1) throw std::runtime_error("Parking lot is filled. try after some time");
+        
+        Ticket ticket;
+
+        ticket.vehicle_id = vehicle.v_id;
+        ticket.t_id = std::to_string(IdGenerator::generate());
+        ticket.t_type = vehicle.v_type;
+        ticket.t_start = std::chrono::steady_clock::now();
+        ticket.level = vehicle_loc.level;
+        ticket.spot = vehicle_loc.spot;
+
+        activeTickets[ticket.t_id] = ticket;
+        return ticket;
     }
 
-
-    void park(const Vehicle& vehicle)
-    {
-        location vehicle_loc = l.park_vehicle(v.v_type);
-        if(vehicle_loc.level == -1) std::cout <<"Parking lot is filled. try after some time";
-        else {
-            t.level = vehicle_loc.level;
-            t.spot = vehicle_loc.spot;
-        }
-
-        v = vehicle;
-        t.t_id = IdGenerator::generate();
-        t.t_type = vehicle.v_type;
-        t.t_start = std::chrono::high_resolution_clock::now();
-        t.level = vehicle_loc.level;
-        t.spot = vehicle_loc.spot;
-    }
-
-    double calculateCost(const dt& s_time, const dt& e_time) 
+    double calculateCost(const Ticket& ticket, const dt& e_time) 
     {
         //time calculation
-        std::chrono::duration <double> v_duration = e_time - s_time;
+        std::chrono::duration <double> v_duration = e_time - ticket.t_start;
         int time_taken = std::chrono::duration_cast<std::chrono::seconds>(v_duration).count();
         int hrs = time_taken / 3600;
         int mins = (time_taken % 3600) / 60;
@@ -337,42 +342,36 @@ public:
 
         std::unique_ptr<CostStrategy> cs;
         //cost calculation
-        if(v.v_type == VehicleType::Bike) {
+        if(ticket.t_type == VehicleType::Bike) {
             cs = std::make_unique<BikeCost>();
         }
 
-        if(v.v_type == VehicleType::Car) {
+        if(ticket.t_type == VehicleType::Car) {
             cs = std::make_unique<CarCost>();
         }
 
-        if(v.v_type == VehicleType::Truck) {
+        if(ticket.t_type == VehicleType::Truck) {
             cs = std::make_unique<TruckCost>();
         }
         return cs->getCost(hrs);
     }
 
-    double unpark(const Ticket& t)
+    double unpark(const std::string& ticketID)
     {
-        l.unpark_vehicle(t);
-        dt t_end = std::chrono::high_resolution_clock::now();
-        return calculateCost(t.t_start, t_end);
+        auto it = activeTickets.find(ticketID);
+        if(it == activeTickets.end()) {
+            throw std::runtime_error("Invalid ticket");
+        }
+
+        Ticket& ticket = it->second;
+        l.unpark_vehicle(ticket);
+        dt t_end = std::chrono::steady_clock::now();
+        double cost = calculateCost(ticket, t_end);
+        activeTickets.erase(it);
+        return cost;
     }
 
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
